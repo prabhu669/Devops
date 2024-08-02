@@ -1,0 +1,74 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  LogRetentionLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'lambda.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'LogRetentionPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:PutRetentionPolicy'
+                Resource: '*'
+
+  LogRetentionLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: 'index.handler'
+      Role: !GetAtt LogRetentionLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+
+          def handler(event, context):
+              logs_client = boto3.client('logs')
+              
+              log_groups = logs_client.describe_log_groups()
+              for log_group in log_groups['logGroups']:
+                  log_group_name = log_group['logGroupName']
+                  logs_client.put_retention_policy(
+                      logGroupName=log_group_name,
+                      retentionInDays=300
+                  )
+                  print(f'Set retention policy of {log_group_name} to 300 days.')
+
+              return {
+                  'statusCode': 200,
+                  'body': 'Retention policy set for log groups.'
+      Runtime: 'python3.9'
+      Timeout: 60
+
+  DailyEventRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      ScheduleExpression: 'rate(1 day)'
+      Targets:
+        - Arn: !GetAtt LogRetentionLambdaFunction.Arn
+          Id: 'LogRetentionRuleTarget'
+
+  PermissionForEventsToInvokeLambda:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref LogRetentionLambdaFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt DailyEventRule.Arn
+
+Outputs:
+  LogRetentionLambdaFunctionArn:
+    Description: ARN of the Log Retention Lambda Function
+    Value: !GetAtt LogRetentionLambdaFunction.Arn
+
+  DailyEventRuleArn:
+    Description: ARN of the Daily Event Rule
+    Value: !GetAtt DailyEventRule.Arn
